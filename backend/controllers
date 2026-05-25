@@ -1,0 +1,119 @@
+// Controllers define logic for handling requests. They edit data, interact with databases, and return responses to the client.
+// Edit data and are called by routes.
+
+// Steam uses query parameters, so headers aren't needed for authentication.
+// API key is queried in their API calls.
+
+const STEAM_API_KEY = process.env.API_KEY;
+const NodeCache = require( "node-cache" );
+const myCache = new NodeCache({stdTTL: 3600, checkperiod: 600}); // Cache for 1 hour, check every 10 minutes
+
+
+// User input steamid, get profile picture and name from steam user
+// RETURNS JSON object with profile picture and name
+// GET https://partner.steam-api.com/ISteamUser/GetPlayerSummaries/v2/
+
+const getProfileInformation = async (req, res) => {
+    try {
+            // 1. Correctly get the steamid from req.params
+            const { steamid } = req.params; // brackets since steamid is a varialbe, not a string. It can be anything.
+            const uri = `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${STEAM_API_KEY}&steamids=${steamid}`;
+            const response = await fetch(uri); 
+            const data = await response.json();
+
+            // 2. Parse the data to get the info you need
+            const profile_picture = data.response.players[0].avatarfull;
+            const profile_name = data.response.players[0].personaname;
+            const profile_url = data.response.players[0].profileurl;
+
+            // 3. Send only ONE response back with the data, being a JSON object containing profile name and profile picture
+            res.status(200).json({profile_picture, profile_name, profile_url});
+
+        } catch (error){
+            res.status(500).send({message: "Error fetching profile information"});
+        }
+}
+
+// User inpuut steamid, get list of games from steam user
+// Returns JSON object with list of games, playtime, and icons for each game
+// GET https://partner.steam-api.com/IPlayerService/GetOwnedGames/v1/
+
+const getOwnedGames = async (req, res) => {
+    try {
+        // 1. Correctly get the steamid from req.params
+        const { steamid } = req.params;
+        const uri = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${STEAM_API_KEY}&steamid=${steamid}&include_appinfo=true$include_played_free_games=true`;
+        const response = await fetch(uri);
+        const data = await response.json();
+
+        // 2. Parse the data to get game name, playtime, icon, and playtime forever for each game
+        const games = data.response.games.map(game => {
+            return {
+                name: game.name,
+                playtime: game.playtime_forever,
+                icon: `https://media.steampowered.com/steamcommunity/public/images/apps/${game.appid}/${game.img_icon_url}.jpg`
+            }
+        });
+
+        // 3. Cache the response for 1 hour to avoid hitting Steam API rate limits. Cache key is "ownedGames_steamid"
+        const cache_key = `ownedGames_${steamid}`;
+        my_cache.set(cache_key, games);
+        cache_data = my_cache.get(cache_key);
+        
+
+        // 4. Send back response as JSON object containing list of games with name, playtime, and icon
+        res.status(200).json({games});
+
+    } catch (error) {
+        res.status(500).send({message: "Error fetching owned games"});
+    }
+}
+
+// Compares two user's games and returns list of games they have in common, with playtimes and icons included.
+// Returns JSON object with list of games in common, playtime, and icons for each game
+
+const compareGames = async (req, res) => {
+    try {
+        // 1.) Check cache for both users' owned games. If not in cache, call getOwnedGames for each user to fetch from Steam API and store in cache. 
+        if (cache_data) {
+            const user1_games = cache_data[`ownedGames_${req.params.steamid1}`];
+            const user2_games = cache_data[`ownedGames_${req.params.steamid2}`];
+        }
+        if (!user1_games || !user2_games) {
+            const user1_games = await getOwnedGames(req.params.steamid1);
+            const user2_games = await getOwnedGames(req.params.steamid2);
+        }
+
+        // 2.) Compare the two lists of games to find common games. Use a hash map for efficient lookup.
+        const user1_games_map = {};
+        for(i = 0; i < user1_games.response.games.length; i++){
+            user1_games_map[user1_games.response.games[i].appid] = user1_games.response.games[i];
+        }
+        const common_games = []; // Array to store common games with name, playtime for both users, and icon
+        for(i = 0; i < user2_games.response.games.length; i++){
+            if (user1_games_map[user2_games.response.games[i].appid]) {
+                common_games.push({
+                    name: user2_games.response.games[i].name,
+                    playtime_user1: user1_games_map[user2_games.response.games[i].appid].playtime_forever,
+                    playtime_user2: user2_games.response.games[i].playtime_forever,
+                    icon: `https://media.steampowered.com/steamcommunity/public/images/apps/${user2_games.response.games[i].appid}/${user2_games.response.games[i].img_icon_url}.jpg`
+                });
+            }
+        }
+
+        // Send back response as JSON object
+        res.status(200).json({common_games});
+
+    } catch (error) {
+        res.status(500).send({message: "Error comparing games"});
+    }
+}
+
+module.exports = {
+    getProfileInformation,
+    getOwnedGames,
+    compareGames
+};
+
+
+
