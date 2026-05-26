@@ -24,3 +24,5 @@ app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
 });
 
+// Export the app to be used in routes.js
+module.exports = app;

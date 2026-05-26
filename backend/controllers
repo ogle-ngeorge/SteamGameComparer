@@ -74,46 +74,89 @@ const getOwnedGames = async (req, res) => {
 
 const compareGames = async (req, res) => {
     try {
-        // 1.) Check cache for both users' owned games. If not in cache, call getOwnedGames for each user to fetch from Steam API and store in cache. 
-        if (cache_data) {
-            const user1_games = cache_data[`ownedGames_${req.params.steamid1}`];
-            const user2_games = cache_data[`ownedGames_${req.params.steamid2}`];
-        }
+        const steamid1 = req.params.steamid1;
+        const steamid2 = req.params.steamid2;
+
+        // 1.) Check cache for both users' owned games. If not in cache, fetch from Steam API and store in cache.
+        let user1_games = myCache.get(`ownedGames_${steamid1}`);
+        let user2_games = myCache.get(`ownedGames_${steamid2}`);
+
+        console.log(`[Cache] user1 (${steamid1}):`, user1_games ? 'HIT' : 'MISS');
+        console.log(`[Cache] user2 (${steamid2}):`, user2_games ? 'HIT' : 'MISS');
+
         if (!user1_games || !user2_games) {
-            const user1_games = await getOwnedGames(req.params.steamid1);
-            const user2_games = await getOwnedGames(req.params.steamid2);
+            console.log('[API] Cache miss — fetching from Steam API...');
+            // Fetch both users' games in parallel to avoid unnecessary waiting
+            const [res1, res2] = await Promise.all([
+                fetch(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${STEAM_API_KEY}&steamid=${steamid1}&include_appinfo=true`),
+                fetch(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${STEAM_API_KEY}&steamid=${steamid2}&include_appinfo=true`)
+            ]);
+            const data1 = await res1.json();
+            const data2 = await res2.json();
+            user1_games = data1.response.games;
+            user2_games = data2.response.games;
+            myCache.set(`ownedGames_${steamid1}`, user1_games);
+            myCache.set(`ownedGames_${steamid2}`, user2_games);
+            console.log('[API] Games fetched and stored in cache.');
         }
 
         // 2.) Compare the two lists of games to find common games. Use a hash map for efficient lookup.
+        // Build a map of user1's games keyed by appid for O(1) lookup
         const user1_games_map = {};
-        for(i = 0; i < user1_games.response.games.length; i++){
-            user1_games_map[user1_games.response.games[i].appid] = user1_games.response.games[i];
+        for (let i = 0; i < user1_games.length; i++) {
+            user1_games_map[user1_games[i].appid] = user1_games[i];
         }
+
         const common_games = []; // Array to store common games with name, playtime for both users, and icon
-        for(i = 0; i < user2_games.response.games.length; i++){
-            if (user1_games_map[user2_games.response.games[i].appid]) {
+        for (let i = 0; i < user2_games.length; i++) {
+            if (user1_games_map[user2_games[i].appid]) {
                 common_games.push({
-                    name: user2_games.response.games[i].name,
-                    playtime_user1: user1_games_map[user2_games.response.games[i].appid].playtime_forever,
-                    playtime_user2: user2_games.response.games[i].playtime_forever,
-                    icon: `https://media.steampowered.com/steamcommunity/public/images/apps/${user2_games.response.games[i].appid}/${user2_games.response.games[i].img_icon_url}.jpg`
+                    name: user2_games[i].name,
+                    playtime_user1: user1_games_map[user2_games[i].appid].playtime_forever,
+                    playtime_user2: user2_games[i].playtime_forever,
+                    icon: `https://media.steampowered.com/steamcommunity/public/images/apps/${user2_games[i].appid}/${user2_games[i].img_icon_url}.jpg`
                 });
             }
         }
 
         // Send back response as JSON object
         res.status(200).json({common_games});
-
+        
     } catch (error) {
         res.status(500).send({message: "Error comparing games"});
     }
 }
 
+// Export the controller functions to be used in routes
 module.exports = {
     getProfileInformation,
     getOwnedGames,
     compareGames
 };
 
+// NOTES
 
+// req.params is the variable part of the URL defined in routes. For example, in the route /profile/:steamid, :steamid is a variable that can be accessed in the controller as req.params.steamid. 
+// This allows us to get the steamid from the URL when a request is made to that endpoint.
+
+// The controller functions are asynchronous because they make API calls to the Steam API, which is an I/O operation that can take time. 
+// Using async/await allows us to write cleaner code that waits for the API response before proceeding to parse the data and send a response back to the client.
+
+// To get access JSON objects we use dot notation. For example, if we have a JSON object data that looks like this:
+// {
+//     response: { 
+//        players: [
+//            {
+//                avatarfull: "url_to_avatar",
+//                personaname: "profile_name"
+//            }
+//        ]
+//     }
+//
+// We acces avatarfull with data.response.players[0].avatarfull and personaname with data.response.players[0].personaname.
+// It is response because this is the data we get back from Steam API
+
+// res.status sends a response back to the client. We can chain .json() to send a JSON response or .send() to send a plain text response.
+
+// 
 
